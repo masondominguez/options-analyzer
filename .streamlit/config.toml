@@ -1,0 +1,23 @@
+[browser]
+gatherUsageStats = false
+
+[server]
+port = 5000
+address = "0.0.0.0"
+headless = true
+
+[theme]
+# The primary accent color for interactive elements (sliders, active tabs, etc.)
+primaryColor = "#00D26A" 
+
+# The main background color of the main body
+backgroundColor = "#0B0E14" 
+
+# The background color for the sidebar and other secondary containers
+secondaryBackgroundColor = "#151A22" 
+
+# The color of the text
+textColor = "#E0E6ED" 
+
+# The font family (sans serif looks the most modern for dashboards)
+font = "sans serif"
