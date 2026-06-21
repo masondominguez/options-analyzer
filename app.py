@@ -162,11 +162,16 @@ with tab1:
     opt_data = df[df['strike'] == selected_strike].iloc[0]
     iv = opt_data['impliedVolatility']
 
-    bs_price, delta, gamma, theta, vega, prob_itm = black_scholes(
-        spot_price, selected_strike, T, risk_free_rate, iv, option_type)
-    bt_price = binomial_tree_american(
-        spot_price, selected_strike, T, risk_free_rate, iv, steps=100, option_type=option_type)
+    dividend_yield = ticker.info.get('dividendYield', 0) or 0.0
+    # yfinance has changed scale/units across versions — verify against a known
+    # dividend payer (e.g. KO ~3%) before trusting this. If it prints as 3.0
+    # instead of 0.03, divide by 100 here.
 
+    bs_price, delta, gamma, theta, vega, prob_itm = black_scholes(
+        spot_price, selected_strike, T, risk_free_rate, iv, option_type, q=dividend_yield)
+    bt_price = binomial_tree_american(
+        spot_price, selected_strike, T, risk_free_rate, iv, steps=100, option_type=option_type, q=dividend_yield)
+    
     with st.container(border=True):
         st.markdown(f"### Theoretical Pricing (IV: {iv*100:.2f}%, DTE: {int(T*365)})")
         mid_price = (opt_data['bid'] + opt_data['ask']) / 2 if opt_data['ask'] > 0 else opt_data['lastPrice']
