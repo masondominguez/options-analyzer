@@ -48,7 +48,7 @@ def fetch_iv_surface(ticker_symbol, spot_price, surface_type):
         dte = (expiry_date - today).days
         if dte <= 0:
             continue
-        T = dte / 365.0
+        T = (expiry_date - datetime.today()).total_seconds() / (365 * 24 * 3600)
         try:
             chain = ticker.option_chain(exp)
             df = chain.calls if surface_type == "Call" else chain.puts
