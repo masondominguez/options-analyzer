@@ -167,8 +167,6 @@ with tab1:
     # dividend payer (e.g. KO ~3%) before trusting this. If it prints as 3.0
     # instead of 0.03, divide by 100 here.
 
-    st.write(dividend_yield)
-
     bs_price, delta, gamma, theta, vega, prob_itm = black_scholes(
         spot_price, selected_strike, T, risk_free_rate, iv, option_type, q=dividend_yield)
     bt_price = binomial_tree_american(
