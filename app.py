@@ -101,7 +101,7 @@ with st.expander("⚙️ Parameters", expanded=True):
             st.success(f"**{ticker_symbol}** spot price: **${spot_price:.2f}**")
         except Exception:
             st.error("Invalid ticker symbol — please try again.")
-            st.stop(
+            st.stop()
 
         expirations = ticker.options
         if not expirations:
