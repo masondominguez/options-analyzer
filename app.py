@@ -101,7 +101,7 @@ with st.expander("⚙️ Parameters", expanded=True):
             st.success(f"**{ticker_symbol}** spot price: **${spot_price:.2f}**")
         except Exception:
             st.error("Invalid ticker symbol — please try again.")
-            st.stop()
+            st.stop(
 
         expirations = ticker.options
         if not expirations:
@@ -169,8 +169,9 @@ with tab1:
 
     with st.container(border=True):
         st.markdown(f"### Theoretical Pricing (IV: {iv*100:.2f}%, DTE: {int(T*365)})")
+        mid_price = (opt_data['bid'] + opt_data['ask']) / 2 if opt_data['ask'] > 0 else opt_data['lastPrice']
         m1, m2, m3 = st.columns(3)
-        m1.metric("Market Last Price", f"${opt_data['lastPrice']:.2f}")
+        m1.metric("Market Mid Price", f"${mid_price:.2f}")
         m2.metric("European (Black-Scholes)", f"${bs_price:.2f}")
         m3.metric("American (Binomial Tree)", f"${bt_price:.2f}")
         with st.expander("📖 Pricing Models & Probabilities Explained", expanded=False):
