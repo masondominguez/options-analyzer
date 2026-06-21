@@ -8,7 +8,8 @@ import yfinance as yf
 
 from content.models import (
     black_scholes, 
-    binomial_tree_american
+    binomial_tree_american,
+    implied_volatility
 )
 from content.styles import APP_STYLE
 from content.tooltips import (
@@ -160,12 +161,16 @@ with tab1:
 
     df = calls if option_type == "call" else puts
     opt_data = df[df['strike'] == selected_strike].iloc[0]
-    iv = opt_data['impliedVolatility']
 
+    mid_price = (opt_data['bid'] + opt_data['ask']) / 2 if opt_data['ask'] > 0 else opt_data['lastPrice']
+    
     dividend_yield = ticker.info.get('dividendYield', 0) or 0.0
-    # yfinance has changed scale/units across versions — verify against a known
-    # dividend payer (e.g. KO ~3%) before trusting this. If it prints as 3.0
-    # instead of 0.03, divide by 100 here.
+
+    iv = implied_volatility(mid_price, spot_price, selected_strike, T, risk_free_rate, option_type, q=dividend_yield)
+    if iv is None:
+        iv = opt_data['impliedVolatility']  # fallback to Yahoo's IV if solver fails
+        st.caption("⚠️ Could not solve IV from market price — using Yahoo's implied volatility instead.")
+
 
     bs_price, delta, gamma, theta, vega, prob_itm = black_scholes(
         spot_price, selected_strike, T, risk_free_rate, iv, option_type, q=dividend_yield)
