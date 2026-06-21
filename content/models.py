@@ -1,5 +1,26 @@
 import numpy as np
 from scipy.stats import norm
+from scipy.optimize import brentq
+
+def implied_volatility(market_price, S, K, T, r, option_type="call", q=0.0):
+    """Back-solve IV from a live market price (typically bid/ask mid) using
+    this module's own black_scholes(), so IV and pricing stay internally consistent.
+    Returns None if no solution can be bracketed (e.g. price below intrinsic value).
+    """
+    if T <= 0 or market_price <= 0:
+        return None
+
+    def price_diff(sigma):
+        price, *_ = black_scholes(S, K, T, r, sigma, option_type, q)
+        return price - market_price
+
+    try:
+        # Bracket between near-zero and 500% vol — wide enough for any real option
+        return brentq(price_diff, 1e-4, 5.0, xtol=1e-6)
+    except ValueError:
+        # No sign change in bracket — market price is outside what BS can produce
+        # at any vol (e.g. below intrinsic value, likely bad/stale quote data)
+        return None
 
 
 def black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
