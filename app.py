@@ -179,7 +179,6 @@ with tab1:
     
     with st.container(border=True):
         st.markdown(f"### Theoretical Pricing (IV: {iv*100:.2f}%, DTE: {int(T*365)})")
-        mid_price = (opt_data['bid'] + opt_data['ask']) / 2 if opt_data['ask'] > 0 else opt_data['lastPrice']
         m1, m2, m3 = st.columns(3)
         m1.metric("Market Mid Price", f"${mid_price:.2f}")
         m2.metric("European (Black-Scholes)", f"${bs_price:.2f}")
