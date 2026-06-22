@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -63,41 +63,53 @@ def fetch_iv_surface(ticker_symbol, spot_price, surface_type):
         return None
     return pd.concat(rows, ignore_index=True)
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_historical_volatility(ticker_symbol):
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        hist = ticker.history(period="3mo")
+        closes = hist['Close']
+        log_returns = np.log(closes / closes.shift(1)).dropna()
+        hv20 = float(log_returns.rolling(20).std().iloc[-1] * np.sqrt(252))
+        hv60 = float(log_returns.rolling(60).std().iloc[-1] * np.sqrt(252)) if len(log_returns) >= 60 else hv20
+        return hv20, hv60
+    except Exception:
+        return None, None
+
 
 st.set_page_config(page_title="Options Analyzer", layout="wide")
 st.markdown(APP_STYLE, unsafe_allow_html=True)
 st.title("Options Analyzer")
 
-with st.expander("⚙️ Parameters", expanded=True):
-    row1a, row1b = st.columns([1, 1])
-    with row1a:
-        ticker_symbol = st.text_input("Ticker Symbol", value="AMD").upper()
-    with row1b:
-        live_rf_rate = fetch_risk_free_rate()
-        risk_free_input = st.number_input(
-            "Risk-Free Rate (%)",
-            value=live_rf_rate,
-            step=0.1,
-            help="Defaults to the live 13-week U.S. Treasury Bill yield (^IRX)."
-        )
+row1a, row1b = st.columns([1, 1])
+with row1a:
+    ticker_symbol = st.text_input("Ticker Symbol", value="AMD").upper()
+with row1b:
+    live_rf_rate = fetch_risk_free_rate()
+    risk_free_input = st.number_input(
+        "Risk-Free Rate (%)",
+        value=live_rf_rate,
+        step=0.1,
+        help="Defaults to the live 13-week U.S. Treasury Bill yield (^IRX)."
+    )
 
-    risk_free_rate = risk_free_input / 100
+risk_free_rate = risk_free_input / 100
 
-    if ticker_symbol:
-        ticker = yf.Ticker(ticker_symbol)
-        try:
-            spot_price = ticker.history(period="1d")['Close'].iloc[-1]
-            st.success(f"**{ticker_symbol}** spot price: **${spot_price:.2f}**")
-        except Exception:
-            st.error("Invalid ticker symbol — please try again.")
-            st.stop()
+if ticker_symbol:
+    ticker = yf.Ticker(ticker_symbol)
+    try:
+        spot_price = ticker.history(period="1d")['Close'].iloc[-1]
+        st.success(f"**{ticker_symbol}** spot price: **${spot_price:.2f}**")
+    except Exception:
+        st.error("Invalid ticker symbol — please try again.")
+        st.stop()
 
-        expirations = ticker.options
-        if not expirations:
-            st.error("No options data found for this ticker.")
-            st.stop()
+    expirations = ticker.options
+    if not expirations:
+        st.error("No options data found for this ticker.")
+        st.stop()
 
-        st.divider()
+    with st.expander("⚙️ Contract Parameters", expanded=True):
         row2a, row2b = st.columns([1, 1])
         with row2a:
             selected_expiry = st.selectbox("Expiration Date", expirations)
@@ -127,17 +139,69 @@ T = (expiry_date - datetime.today()).total_seconds() / (365 * 24 * 3600)
 if T <= 0:
     T = 0.001
 
+SHARES = 100
+
 tab1, tab2, tab3 = st.tabs(["📊 Strike Analysis", "📋 Option Chain", "🌐 IV Surface"])
 
 with tab2:
     st.subheader(f"Option Chain — {ticker_symbol} · {selected_expiry}")
+
+    with st.container(border=True):
+        st.markdown("### Open Interest & Volume by Strike")
+        oi_metric = st.radio("Metric", ["Open Interest", "Volume"], horizontal=True, key="oi_metric")
+        col_name = 'openInterest' if oi_metric == "Open Interest" else 'volume'
+
+        calls_chart = calls[
+            (calls['strike'] >= spot_price * 0.7) &
+            (calls['strike'] <= spot_price * 1.3)
+        ]
+        puts_chart = puts[
+            (puts['strike'] >= spot_price * 0.7) &
+            (puts['strike'] <= spot_price * 1.3)
+        ]
+
+        oi_fig = go.Figure()
+        oi_fig.add_trace(go.Bar(
+            x=calls_chart['strike'], y=calls_chart[col_name],
+            name='Calls', marker_color='rgba(76,175,80,0.7)'
+        ))
+        oi_fig.add_trace(go.Bar(
+            x=puts_chart['strike'], y=puts_chart[col_name],
+            name='Puts', marker_color='rgba(244,67,54,0.7)'
+        ))
+        oi_fig.add_vline(x=spot_price, line_dash="dash", line_color="#555555",
+                         annotation_text=f"Spot ${spot_price:.2f}", annotation_font_color="#555555")
+        oi_fig.add_vline(x=selected_strike, line_dash="solid", line_color="#9C27B0", line_width=1.5,
+                         annotation_text=f"Strike ${selected_strike:.0f}", annotation_font_color="#9C27B0")
+        oi_fig.update_layout(
+            barmode='group',
+            xaxis_title="Strike",
+            yaxis_title=oi_metric,
+            template="plotly_white",
+            height=350,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(oi_fig, use_container_width=True)
+
+    calls_table = calls[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume', 'openInterest']].copy()
+    calls_table['spread'] = (calls_table['ask'] - calls_table['bid']).round(2)
+    puts_table = puts[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume', 'openInterest']].copy()
+    puts_table['spread'] = (puts_table['ask'] - puts_table['bid']).round(2)
+
+    def highlight_strike(df):
+        return df.style.apply(
+            lambda row: ['background-color: rgba(0,210,106,0.15)' if row['strike'] == selected_strike else '' for _ in row],
+            axis=1
+        )
+
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Calls**")
-        st.dataframe(calls[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume']], height=300)
+        st.dataframe(highlight_strike(calls_table), height=300)
     with col2:
         st.markdown("**Puts**")
-        st.dataframe(puts[['strike', 'lastPrice', 'bid', 'ask', 'impliedVolatility', 'volume']], height=300)
+        st.dataframe(highlight_strike(puts_table), height=300)
+
     with st.expander("📖 How to Read the Option Chain", expanded=False):
         st.markdown(OPTION_CHAIN)
 
@@ -202,6 +266,26 @@ with tab1:
             st.markdown(GREEKS_CHEAT_SHEET)
 
     with st.container(border=True):
+        st.markdown("### Volatility Analysis")
+        hv20, hv60 = fetch_historical_volatility(ticker_symbol)
+        if hv20 is not None:
+            iv_premium_20 = (iv - hv20) * 100
+            v1, v2, v3, v4 = st.columns(4)
+            v1.metric("Implied Volatility", f"{iv*100:.1f}%")
+            v2.metric("20-Day Realized Vol", f"{hv20*100:.1f}%")
+            v3.metric("60-Day Realized Vol", f"{hv60*100:.1f}%")
+            v4.metric("IV Premium (vs HV20)", f"{iv_premium_20:+.1f}pp",
+                      help="Positive = options expensive vs recent realized vol. Negative = cheap.")
+            if iv_premium_20 > 5:
+                st.caption(f"IV is trading at a **{iv_premium_20:.1f} point premium** to 20-day realized vol — options appear relatively expensive; sellers may have an edge.")
+            elif iv_premium_20 < -5:
+                st.caption(f"IV is trading at a **{abs(iv_premium_20):.1f} point discount** to 20-day realized vol — options appear relatively cheap; buyers may have an edge.")
+            else:
+                st.caption("IV is broadly in line with recent realized volatility.")
+        else:
+            st.caption("Historical volatility data unavailable for this ticker.")
+
+    with st.container(border=True):
         st.markdown("### Payout Diagram at Expiration")
 
         if option_type == 'call':
@@ -228,7 +312,6 @@ with tab1:
         price_range = np.linspace(spot_price * 0.7, spot_price * 1.3, 200)
         premium_paid     = opt_data['ask'] if opt_data['ask'] > 0 else opt_data['lastPrice']
         premium_received = opt_data['bid'] if opt_data['bid'] > 0 else opt_data['lastPrice']
-        SHARES = 100
 
         if position == "Buyer (Long)":
             intrinsic        = (np.maximum(0, price_range - selected_strike) if option_type == 'call'
@@ -317,6 +400,85 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
         with st.expander("📖 How to Read the P&L Chart", expanded=False):
             st.markdown(PAYOUT_DIAGRAM)
+
+    with st.container(border=True):
+        st.markdown("### Scenario Grid — P&L at Different Prices & Dates")
+        st.caption(f"Estimated P&L for **{position}** position across a range of underlying prices and future dates. Color: green = profit, red = loss, white = breakeven.")
+
+        dte_total = max(1, int(T * 365))
+
+        if iv < 1e-4:
+            st.info("Scenario grid requires valid IV data.")
+        elif dte_total < 1:
+            st.info("Scenario grid requires at least 1 day to expiration.")
+        else:
+            if dte_total <= 7:
+                n_dates = min(dte_total + 1, 5)
+            elif dte_total <= 30:
+                n_dates = 7
+            else:
+                n_dates = 9
+
+            today = datetime.today()
+            fracs = np.linspace(0, 1, n_dates)
+            T_cols = T * (1 - fracs)
+
+            date_labels = []
+            for frac in fracs[:-1]:
+                d = today + timedelta(days=frac * T * 365)
+                date_labels.append(d.strftime("%b %d"))
+            date_labels.append("Expiry")
+
+            spot_range = np.linspace(spot_price * 0.80, spot_price * 1.20, 13)
+
+            grid = np.zeros((len(spot_range), len(T_cols)))
+
+            for i, s in enumerate(spot_range):
+                for j, t in enumerate(T_cols):
+                    if t <= 1e-4:
+                        opt_val = max(0.0, s - selected_strike) if option_type == 'call' else max(0.0, selected_strike - s)
+                    else:
+                        opt_val, *_ = black_scholes(s, selected_strike, t, risk_free_rate, iv, option_type, q=dividend_yield)
+
+                    if position == "Buyer (Long)":
+                        grid[i, j] = (opt_val - mid_price) * SHARES
+                    elif position in ("Seller – Naked Call", "Seller – Naked Put"):
+                        grid[i, j] = (mid_price - opt_val) * SHARES
+                    elif position == "Seller – Covered Call":
+                        grid[i, j] = ((s - spot_price) + (mid_price - opt_val)) * SHARES
+                    else:
+                        grid[i, j] = (mid_price - opt_val) * SHARES
+
+            abs_max = max(abs(grid.min()), abs(grid.max()), 1)
+
+            grid_fig = go.Figure(data=go.Heatmap(
+                z=grid,
+                x=date_labels,
+                y=spot_range,
+                colorscale=[[0, '#F44336'], [0.5, '#FFFFFF'], [1, '#4CAF50']],
+                zmid=0,
+                zmin=-abs_max,
+                zmax=abs_max,
+                colorbar=dict(title="P&L ($)"),
+                hovertemplate="Date: %{x}<br>Spot: $%{y:,.0f}<br>P&L: $%{z:,.0f}<extra></extra>",
+            ))
+            grid_fig.add_hline(
+                y=spot_price,
+                line_dash="dash",
+                line_color="rgba(85,85,85,0.8)",
+                line_width=1.5,
+                annotation_text=f"Current ${spot_price:.0f}",
+                annotation_font_color="#555555",
+                annotation_position="right"
+            )
+            grid_fig.update_layout(
+                xaxis_title="Date",
+                yaxis_title="Underlying Price",
+                yaxis=dict(tickprefix="$", tickformat=",.0f"),
+                height=420,
+                template="plotly_white",
+            )
+            st.plotly_chart(grid_fig, use_container_width=True)
 
 with tab3:
     st.subheader("Implied Volatility Surface")
