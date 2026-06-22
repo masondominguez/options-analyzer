@@ -7,17 +7,17 @@ import streamlit as st
 import yfinance as yf
 
 from content.models import (
-    black_scholes, 
+    black_scholes,
     binomial_tree_american,
     implied_volatility
 )
 from content.styles import APP_STYLE
 from content.tooltips import (
     CALL_POSITION_HELP,
-    GREEKS_CHEAT_SHEET, 
+    GREEKS_CHEAT_SHEET,
     IV_SURFACE,
-    OPTION_CHAIN, 
-    PAYOUT_DIAGRAM, 
+    OPTION_CHAIN,
+    PAYOUT_DIAGRAM,
     PRICING_MODELS,
     PROBABILITIES_EXPLAINED
 )
@@ -25,30 +25,25 @@ from content.tooltips import (
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_risk_free_rate():
-    """Fetches the 13-week Treasury Bill rate (^IRX) to use as the risk-free rate."""
     try:
         irx = yf.Ticker("^IRX")
-        # The price of ^IRX is the actual yield percentage (e.g., 5.25)
         latest_rate = irx.history(period="1d")['Close'].iloc[-1]
         return float(latest_rate)
     except Exception:
-        # Fallback to 5.0% if the fetch fails
         return 5.0
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_iv_surface(ticker_symbol, spot_price, surface_type):
-    """Fetch IV across all expirations and return a pivoted DataFrame."""
     ticker = yf.Ticker(ticker_symbol)
     expirations = ticker.options
     today = datetime.today()
-
     rows = []
     for exp in expirations:
         expiry_date = datetime.strptime(exp, "%Y-%m-%d")
         dte = (expiry_date - today).days
         if dte <= 0:
             continue
-        T = (expiry_date - datetime.today()).total_seconds() / (365 * 24 * 3600)
+        T = dte / 365.0
         try:
             chain = ticker.option_chain(exp)
             df = chain.calls if surface_type == "Call" else chain.puts
@@ -64,22 +59,15 @@ def fetch_iv_surface(ticker_symbol, spot_price, surface_type):
             rows.append(df[['strike', 'moneyness', 'dte', 'impliedVolatility']])
         except Exception:
             continue
-
     if not rows:
         return None
+    return pd.concat(rows, ignore_index=True)
 
-    all_data = pd.concat(rows, ignore_index=True)
-    return all_data
-
-# --- USER INTERFACE ---
 
 st.set_page_config(page_title="Options Analyzer", layout="wide")
-
 st.markdown(APP_STYLE, unsafe_allow_html=True)
-
 st.title("Options Analyzer")
 
-# --- PARAMETERS — single collapsible block, visible on all screen sizes ---
 with st.expander("⚙️ Parameters", expanded=True):
     row1a, row1b = st.columns([1, 1])
     with row1a:
@@ -134,11 +122,8 @@ with st.expander("⚙️ Parameters", expanded=True):
         selected_strike = st.selectbox("Strike Price", available_strikes, index=default_index)
         st.session_state.target_strike = selected_strike
 
-# ── Analysis (outside the expander — always visible) ─────────────────────────
-
-# Calculate Time to Expiration (T)
 expiry_date = datetime.strptime(selected_expiry, "%Y-%m-%d")
-T = (expiry_date - datetime.today()).days / 365.0
+T = (expiry_date - datetime.today()).total_seconds() / (365 * 24 * 3600)
 if T <= 0:
     T = 0.001
 
@@ -163,20 +148,22 @@ with tab1:
     opt_data = df[df['strike'] == selected_strike].iloc[0]
 
     mid_price = (opt_data['bid'] + opt_data['ask']) / 2 if opt_data['ask'] > 0 else opt_data['lastPrice']
-    
     dividend_yield = ticker.info.get('dividendYield', 0) or 0.0
 
     iv = implied_volatility(mid_price, spot_price, selected_strike, T, risk_free_rate, option_type, q=dividend_yield)
     if iv is None:
-        iv = opt_data['impliedVolatility']  # fallback to Yahoo's IV if solver fails
+        iv = opt_data['impliedVolatility']
         st.caption("⚠️ Could not solve IV from market price — using Yahoo's implied volatility instead.")
 
+    if iv is None or iv < 1e-4:
+        st.warning("⚠️ No reliable IV data available for this contract. It may be illiquid or have stale/missing quotes. Pricing metrics below are not meaningful.")
+        iv = 0.0
 
     bs_price, delta, gamma, theta, vega, prob_itm = black_scholes(
         spot_price, selected_strike, T, risk_free_rate, iv, option_type, q=dividend_yield)
     bt_price = binomial_tree_american(
         spot_price, selected_strike, T, risk_free_rate, iv, steps=100, option_type=option_type, q=dividend_yield)
-    
+
     with st.container(border=True):
         st.markdown(f"### Theoretical Pricing (IV: {iv*100:.2f}%, DTE: {int(T*365)})")
         m1, m2, m3 = st.columns(3)
@@ -185,7 +172,7 @@ with tab1:
         m3.metric("American (Binomial Tree)", f"${bt_price:.2f}")
         with st.expander("📖 Pricing Models & Probabilities Explained", expanded=False):
             st.markdown(PRICING_MODELS)
-    
+
     with st.container(border=True):
         st.markdown("### Probability at Expiration")
         st.caption(
@@ -203,7 +190,7 @@ with tab1:
                   help="Underlying price at which the buyer neither profits nor loses.")
         with st.expander("📖 Probabilities Explained", expanded=False):
             st.markdown(PROBABILITIES_EXPLAINED)
-    
+
     with st.container(border=True):
         st.markdown("### Greeks (Black-Scholes Base)")
         g1, g2, g3, g4 = st.columns(4)
@@ -213,13 +200,13 @@ with tab1:
         g4.metric("Vega", f"{vega:.4f}", help="$ change per 1% move in implied volatility.")
         with st.expander("📖 The Greeks Cheat Sheet", expanded=False):
             st.markdown(GREEKS_CHEAT_SHEET)
-    
+
     with st.container(border=True):
         st.markdown("### Payout Diagram at Expiration")
-    
+
         if option_type == 'call':
             position_options = ["Buyer (Long)", "Seller – Naked Call", "Seller – Covered Call"]
-            position_help = (CALL_POSITION_HELP)
+            position_help = CALL_POSITION_HELP
         else:
             position_options = ["Buyer (Long)", "Seller – Naked Put", "Seller – Cash-Secured Put"]
             position_help = (
@@ -230,19 +217,19 @@ with tab1:
                 "**Cash-Secured Put**: hold enough cash to buy the stock if assigned; "
                 "max loss = strike − premium (stock goes to zero)."
             )
-    
+
         position = st.radio(
             "Position",
             position_options,
             key=f"position_toggle_{option_type}",
             help=position_help,
         )
-    
+
         price_range = np.linspace(spot_price * 0.7, spot_price * 1.3, 200)
-        premium_paid     = opt_data['ask'] if opt_data['ask']  > 0 else opt_data['lastPrice']
-        premium_received = opt_data['bid'] if opt_data['bid']  > 0 else opt_data['lastPrice']
+        premium_paid     = opt_data['ask'] if opt_data['ask'] > 0 else opt_data['lastPrice']
+        premium_received = opt_data['bid'] if opt_data['bid'] > 0 else opt_data['lastPrice']
         SHARES = 100
-    
+
         if position == "Buyer (Long)":
             intrinsic        = (np.maximum(0, price_range - selected_strike) if option_type == 'call'
                                 else np.maximum(0, selected_strike - price_range))
@@ -253,7 +240,7 @@ with tab1:
             max_profit_str   = ("unlimited" if option_type == 'call'
                                 else f"${(selected_strike - premium_paid) * SHARES:,.2f}")
             max_loss_str     = f"${premium_paid * SHARES:,.2f}"
-    
+
         elif position in ("Seller – Naked Call", "Seller – Naked Put"):
             payout_per_share = np.where(
                 price_range > selected_strike if option_type == 'call' else price_range < selected_strike,
@@ -266,7 +253,7 @@ with tab1:
             max_profit_str   = f"${premium_received * SHARES:,.2f}"
             max_loss_str     = ("unlimited" if option_type == 'call'
                                 else f"${(selected_strike - premium_received) * SHARES:,.2f}")
-    
+
         elif position == "Seller – Covered Call":
             stock_leg        = price_range - spot_price
             short_call_leg   = np.where(price_range > selected_strike,
@@ -276,17 +263,17 @@ with tab1:
             chart_breakeven  = spot_price - premium_received
             max_profit_str   = f"${(selected_strike - spot_price + premium_received) * SHARES:,.2f}"
             max_loss_str     = f"${(spot_price - premium_received) * SHARES:,.2f}"
-    
-        else:  # Cash-Secured Put
+
+        else:
             payout_per_share = np.where(price_range < selected_strike,
                                         price_range - selected_strike, 0) + premium_received
             line_color       = '#4CAF50'
             chart_breakeven  = selected_strike - premium_received
             max_profit_str   = f"${premium_received * SHARES:,.2f}"
             max_loss_str     = f"${(selected_strike - premium_received) * SHARES:,.2f}"
-    
+
         payout = payout_per_share * SHARES
-    
+
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=price_range, y=np.maximum(payout, 0),
@@ -391,6 +378,5 @@ with tab3:
             f"{iv_data[x_col].nunique()} strike points · "
             f"Strikes filtered to ±30% of spot · Cached for 5 min"
         )
-        # --- NEW EDUCATIONAL TOOLTIP EXPANDER ---
         with st.expander("📖 How to Interpret the IV Surface", expanded=False):
             st.markdown(IV_SURFACE)
