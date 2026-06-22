@@ -2,32 +2,8 @@ import numpy as np
 from scipy.stats import norm
 from scipy.optimize import brentq
 
-def implied_volatility(market_price, S, K, T, r, option_type="call", q=0.0):
-    """Back-solve IV from a live market price (typically bid/ask mid) using
-    this module's own black_scholes(), so IV and pricing stay internally consistent.
-    Returns None if no solution can be bracketed (e.g. price below intrinsic value).
-    """
-    if T <= 0 or market_price <= 0:
-        return None
-
-    def price_diff(sigma):
-        price, *_ = black_scholes(S, K, T, r, sigma, option_type, q)
-        return price - market_price
-
-    try:
-        # Bracket between near-zero and 500% vol — wide enough for any real option
-        return brentq(price_diff, 1e-4, 5.0, xtol=1e-6)
-    except ValueError:
-        # No sign change in bracket — market price is outside what BS can produce
-        # at any vol (e.g. below intrinsic value, likely bad/stale quote data)
-        return None
-
 
 def black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
-    """Calculate Black-Scholes European option price, Greeks, and ITM probability.
-    
-    q: continuous dividend yield (e.g. 0.015 for 1.5%). Defaults to 0 (no dividend).
-    """
     if T <= 0 or sigma <= 0: return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     d1 = (np.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
@@ -53,15 +29,12 @@ def black_scholes(S, K, T, r, sigma, option_type="call", q=0.0):
 
 
 def binomial_tree_american(S, K, T, r, sigma, steps=100, option_type="call", q=0.0):
-    """Calculate American option price using a CRR Binomial Tree.
-    
-    q: continuous dividend yield. Defaults to 0 (no dividend).
-    """
-    if T <= 0 or sigma <= 0: return 0.0
+    if T <= 0 or sigma <= 1e-4: return 0.0
     dt = T / steps
     u = np.exp(sigma * np.sqrt(dt))
     d = 1 / u
     p = (np.exp((r - q) * dt) - d) / (u - d)
+    if not (0 < p < 1): return 0.0
     asset_prices = np.array([S * (u ** j) * (d ** (steps - j)) for j in range(steps + 1)])
     if option_type == "call":
         option_values = np.maximum(0, asset_prices - K)
@@ -75,3 +48,15 @@ def binomial_tree_american(S, K, T, r, sigma, steps=100, option_type="call", q=0
         else:
             option_values = np.maximum(option_values, K - asset_prices)
     return option_values[0]
+
+
+def implied_volatility(market_price, S, K, T, r, option_type="call", q=0.0):
+    if T <= 0 or market_price <= 0:
+        return None
+    def price_diff(sigma):
+        price, *_ = black_scholes(S, K, T, r, sigma, option_type, q)
+        return price - market_price
+    try:
+        return brentq(price_diff, 1e-4, 5.0, xtol=1e-6)
+    except ValueError:
+        return None
